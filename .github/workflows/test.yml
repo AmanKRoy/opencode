@@ -15,10 +15,11 @@ concurrency:
 
 permissions:
   contents: read
+  checks: write
 
 jobs:
   unit:
-    name: unit (${{ matrix.settings.name }})
+    name: unit (${{ matrix.settings.name }}, ${{ matrix.pkg.name }})
     strategy:
       fail-fast: false
       matrix:
@@ -27,6 +28,15 @@ jobs:
             host: blacksmith-4vcpu-ubuntu-2404
           - name: windows
             host: blacksmith-4vcpu-windows-2025
+        pkg:
+          - id: opencode
+            name: opencode
+            dir: packages/opencode
+            filter: opencode
+          - id: app
+            name: app
+            dir: packages/app
+            filter: "@opencode-ai/app"
     runs-on: ${{ matrix.settings.host }}
     defaults:
       run:
@@ -46,7 +56,45 @@ jobs:
           git config --global user.name "opencode"
 
       - name: Run unit tests
-        run: bun turbo test
+        run: |
+          set -o pipefail
+          mkdir -p ".artifacts/unit/${{ matrix.pkg.id }}" "${{ matrix.pkg.dir }}/.artifacts/unit"
+          bunx turbo run test:ci --filter="${{ matrix.pkg.filter }}" --log-order=grouped --output-logs=full \
+            2>&1 | tee ".artifacts/unit/${{ matrix.pkg.id }}/turbo.log"
+
+      - name: Check unit report
+        if: always()
+        id: report
+        run: |
+          if [ -f "${{ matrix.pkg.dir }}/.artifacts/unit/junit.xml" ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "found=false" >> "$GITHUB_OUTPUT"
+          echo "### Unit report unavailable" >> "$GITHUB_STEP_SUMMARY"
+          echo "Turbo did not produce JUnit output for ${{ matrix.pkg.name }} on ${{ matrix.settings.name }}." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish unit report
+        if: always() && steps.report.outputs.found == 'true'
+        uses: mikepenz/action-junit-report@v6
+        with:
+          check_name: unit (${{ matrix.settings.name }}, ${{ matrix.pkg.name }})
+          report_paths: ${{ matrix.pkg.dir }}/.artifacts/unit/junit.xml
+          detailed_summary: true
+          include_time_in_summary: true
+          fail_on_failure: false
+
+      - name: Upload unit artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-${{ matrix.settings.name }}-${{ matrix.pkg.id }}-${{ github.run_attempt }}
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            .artifacts/unit/${{ matrix.pkg.id }}/turbo.log
+            ${{ matrix.pkg.dir }}/.artifacts/unit/junit.xml
 
   e2e:
     name: e2e (${{ matrix.settings.name }})
