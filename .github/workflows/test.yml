@@ -15,6 +15,7 @@ concurrency:
 
 permissions:
   contents: read
+  checks: write
 
 jobs:
   unit:
@@ -54,9 +55,18 @@ jobs:
           git config --global user.email "bot@opencode.ai"
           git config --global user.name "opencode"
 
+      - name: Cache Turbo
+        uses: actions/cache@v4
+        with:
+          path: node_modules/.cache/turbo
+          key: turbo-${{ runner.os }}-${{ hashFiles('turbo.json', '**/package.json') }}-${{ github.sha }}
+          restore-keys: |
+            turbo-${{ runner.os }}-${{ hashFiles('turbo.json', '**/package.json') }}-
+            turbo-${{ runner.os }}-
+
       - name: Run unit tests
         run: |
-          set -o pipefail
+          [[ "$RUNNER_OS" != "Windows" ]] && set -o pipefail || true
           mkdir -p ".artifacts/unit/${{ matrix.pkg.id }}" "${{ matrix.pkg.dir }}/.artifacts/unit"
           bunx turbo run test:ci --filter="${{ matrix.pkg.filter }}" --log-order=grouped --output-logs=full \
             2>&1 | tee ".artifacts/unit/${{ matrix.pkg.id }}/turbo.log"
@@ -79,7 +89,7 @@ jobs:
         uses: mikepenz/action-junit-report@v6
         with:
           report_paths: ${{ matrix.pkg.dir }}/.artifacts/unit/junit.xml
-          annotate_only: true
+          check_name: "unit (${{ matrix.settings.name }}, ${{ matrix.pkg.name }})"
           detailed_summary: true
           include_time_in_summary: true
           fail_on_failure: false
